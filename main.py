@@ -70,6 +70,7 @@ class MainWindow(QMainWindow):
 
         self._settings = load_settings()
         self._shortcuts: dict[str, QShortcut] = {}
+        self._auto_analyze: bool = self._settings.get("auto_analyze", True)
 
         self._build_ui()
         self._build_shortcuts()
@@ -79,6 +80,12 @@ class MainWindow(QMainWindow):
         self._cursor_timer = QTimer(self)
         self._cursor_timer.setInterval(40)
         self._cursor_timer.timeout.connect(self._update_cursor)
+
+        # Auto-analyze debounce — fires 400 ms after selection stops moving
+        self._analyze_timer = QTimer(self)
+        self._analyze_timer.setInterval(400)
+        self._analyze_timer.setSingleShot(True)
+        self._analyze_timer.timeout.connect(self._analyze_reference)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -178,6 +185,8 @@ class MainWindow(QMainWindow):
 
     def _build_shortcuts(self):
         self._apply_keybindings(self._settings["keybindings"])
+        self._waveform.set_draw_modifier(self._settings.get("draw_sel_modifier", "Shift"))
+        self._auto_analyze = self._settings.get("auto_analyze", True)
 
     def _action_map(self) -> dict:
         return {
@@ -226,12 +235,23 @@ class MainWindow(QMainWindow):
 
     def _open_settings(self):
         from settings_dialog import SettingsDialog
-        dlg = SettingsDialog(self._settings["keybindings"], self)
+        dlg = SettingsDialog(
+            self._settings["keybindings"],
+            self._settings.get("draw_sel_modifier", "Shift"),
+            self._settings.get("auto_analyze", True),
+            self,
+        )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             new_kb = dlg.get_keybindings()
+            new_mod = dlg.get_draw_modifier()
+            new_aa = dlg.get_auto_analyze()
             self._settings["keybindings"] = new_kb
+            self._settings["draw_sel_modifier"] = new_mod
+            self._settings["auto_analyze"] = new_aa
             save_settings(self._settings)
             self._apply_keybindings(new_kb)
+            self._waveform.set_draw_modifier(new_mod)
+            self._auto_analyze = new_aa
             self.statusBar().showMessage("Settings saved.")
 
     # ------------------------------------------------------------------
@@ -421,6 +441,8 @@ class MainWindow(QMainWindow):
 
     def _on_selection_changed(self, start: float, end: float):
         self._sel_label.setText(f"  {start:.3f} s  —  {end:.3f} s  ({end - start:.3f} s)")
+        if self._auto_analyze and self._engine.audio:
+            self._analyze_timer.start()  # restarts the 400 ms countdown
 
     def _shift_selection(self, delta: float):
         if not self._engine.audio:

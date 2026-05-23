@@ -40,11 +40,19 @@ ACTION_LABELS: dict[str, str] = {
 
 def load_settings() -> dict:
     """Return settings dict, merging saved values over defaults."""
-    result: dict = {"keybindings": dict(DEFAULT_KEYBINDINGS)}
+    result: dict = {
+        "keybindings": dict(DEFAULT_KEYBINDINGS),
+        "draw_sel_modifier": "Shift",
+        "auto_analyze": True,
+    }
     try:
         if SETTINGS_FILE.exists():
             saved = json.loads(SETTINGS_FILE.read_text())
             result["keybindings"].update(saved.get("keybindings", {}))
+            if "draw_sel_modifier" in saved:
+                result["draw_sel_modifier"] = saved["draw_sel_modifier"]
+            if "auto_analyze" in saved:
+                result["auto_analyze"] = bool(saved["auto_analyze"])
     except Exception:
         pass
     return result

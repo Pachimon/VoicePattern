@@ -2,7 +2,7 @@ from typing import Optional
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtWidgets import QWidget, QVBoxLayout
 
 
@@ -15,6 +15,7 @@ class WaveformWidget(QWidget):
     - Drag region handles  → resize selection
     - Drag region body     → move selection
     - Click outside region → snap region center to that position (width preserved)
+    - Modifier+drag        → draw a brand-new selection (modifier defaults to Shift)
     - Scroll wheel         → zoom in / out
     - Keyboard shortcuts handled in main.py
     """
@@ -24,6 +25,11 @@ class WaveformWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._duration = 0.0
+
+        # Draw-new-selection state
+        self._draw_modifier = Qt.KeyboardModifier.ShiftModifier
+        self._drawing = False
+        self._draw_start_x = 0.0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -62,6 +68,10 @@ class WaveformWidget(QWidget):
 
         # Click-outside-region → snap to click position
         self._plot.scene().sigMouseClicked.connect(self._on_scene_clicked)
+
+        # Event filter on viewport for modifier+drag → draw new selection
+        self._plot.viewport().setMouseTracking(True)
+        self._plot.viewport().installEventFilter(self)
 
     # ------------------------------------------------------------------
     # Public API
@@ -114,9 +124,67 @@ class WaveformWidget(QWidget):
             self._cursor.setPos(pos_sec)
             self._cursor.setVisible(True)
 
+    def set_draw_modifier(self, key_str: str):
+        """Set which modifier key triggers drawing a new selection (Shift/Ctrl/Alt)."""
+        k = key_str.strip().lower()
+        if "ctrl" in k:
+            self._draw_modifier = Qt.KeyboardModifier.ControlModifier
+        elif "alt" in k:
+            self._draw_modifier = Qt.KeyboardModifier.AltModifier
+        elif "meta" in k:
+            self._draw_modifier = Qt.KeyboardModifier.MetaModifier
+        else:
+            self._draw_modifier = Qt.KeyboardModifier.ShiftModifier
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def eventFilter(self, obj, event):
+        if obj is not self._plot.viewport():
+            return False
+
+        etype = event.type()
+
+        if etype == QEvent.Type.MouseButtonPress:
+            if (event.button() == Qt.MouseButton.LeftButton
+                    and bool(event.modifiers() & self._draw_modifier)):
+                x = self._viewport_x_to_data(event.pos())
+                if x is not None:
+                    self._drawing = True
+                    self._draw_start_x = x
+                    self._region.setRegion([x, x + 0.001])
+                    self._plot.viewport().setCursor(Qt.CursorShape.CrossCursor)
+                return True  # consume — prevents pan/click-snap
+
+        elif etype == QEvent.Type.MouseMove:
+            if self._drawing:
+                x = self._viewport_x_to_data(event.pos())
+                if x is not None:
+                    s = min(self._draw_start_x, x)
+                    e = max(self._draw_start_x, x)
+                    if e - s < 0.001:
+                        e = s + 0.001
+                    self._region.setRegion([s, e])
+                return True
+
+        elif etype == QEvent.Type.MouseButtonRelease:
+            if self._drawing:
+                self._drawing = False
+                self._plot.viewport().unsetCursor()
+                return True
+
+        return False
+
+    def _viewport_x_to_data(self, pos) -> Optional[float]:
+        """Convert a viewport QPoint to a time value clamped to [0, duration]."""
+        scene_pos = self._plot.mapToScene(pos)
+        vb = self._plot.getPlotItem().getViewBox()
+        x = float(vb.mapSceneToView(scene_pos).x())
+        x = max(0.0, x)
+        if self._duration > 0:
+            x = min(self._duration, x)
+        return x
 
     def _on_region_changed(self):
         s, e = self._region.getRegion()
@@ -131,6 +199,10 @@ class WaveformWidget(QWidget):
         """Snap the selection region when user clicks outside it."""
         if event.button() != Qt.MouseButton.LeftButton:
             return
+        # Skip when the draw modifier is held (handled by event filter)
+        if event.modifiers() & self._draw_modifier:
+            return
+
         vb = self._plot.getPlotItem().getViewBox()
         x = float(vb.mapSceneToView(event.scenePos()).x())
 

@@ -4,8 +4,47 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from pyqtgraph import Point
+from pyqtgraph.Qt import QtCore as _pgQtCore
 
 from analysis import compare_pitch
+
+
+class _WideHitLine(pg.InfiniteLine):
+    """
+    InfiniteLine with a wide invisible mouse target while keeping the
+    visual line thin.  pyqtgraph sizes the hit area from pen widths;
+    we override _computeBoundingRect to use a fixed pixel half-width
+    instead, so the click zone is always 10 px on each side regardless
+    of how thin the drawn line is.
+    """
+
+    _HIT_HALF_PX = 22
+
+    def _computeBoundingRect(self):
+        vr = self.viewRect()
+        if vr is None:
+            return _pgQtCore.QRectF()
+        _, ortho = self.pixelVectors(direction=Point(1, 0))
+        px = 0 if ortho is None else ortho.y()
+        w = (self._maxMarkerSize + self._HIT_HALF_PX + 1) * px
+        br = _pgQtCore.QRectF(vr)
+        br.setBottom(-w)
+        br.setTop(w)
+        length = br.width()
+        left = br.left() + length * self.span[0]
+        right = br.left() + length * self.span[1]
+        br.setLeft(left)
+        br.setRight(right)
+        br = br.normalized()
+        vs = self.getViewBox().size()
+        if self._bounds != br or self._lastViewSize != vs:
+            self._bounds = br
+            self._lastViewSize = vs
+            self.prepareGeometryChange()
+        self._endPoints = (left, right)
+        self._lastViewRect = vr
+        return self._bounds
 
 
 class PitchWidget(QWidget):
@@ -60,35 +99,52 @@ class PitchWidget(QWidget):
         # Reference pitch curve (blue)
         self._ref_curve = pg.PlotDataItem(
             pen=pg.mkPen("#4a9eff", width=2.5),
-            symbol="o", symbolSize=4,
-            symbolBrush="#4a9eff", symbolPen=None,
+            symbol="o",
+            symbolSize=4,
+            symbolBrush="#4a9eff",
+            symbolPen=None,
             connect="finite",
         )
         # Recording pitch curve (orange)
         self._rec_curve = pg.PlotDataItem(
             pen=pg.mkPen("#ff8c42", width=2.5),
-            symbol="o", symbolSize=4,
-            symbolBrush="#ff8c42", symbolPen=None,
+            symbol="o",
+            symbolSize=4,
+            symbolBrush="#ff8c42",
+            symbolPen=None,
             connect="finite",
         )
         self._plot.addItem(self._ref_curve)
         self._plot.addItem(self._rec_curve)
 
+        # Orange dashed — same width in both states, colour shifts to gold on hover.
+        # _WideHitLine keeps the click/drag target ~10 px wide on each side.
         _handle_pen = pg.mkPen("#ff8c42", width=2, style=Qt.PenStyle.DashLine)
+        _handle_hover_pen = pg.mkPen("#ffd700", width=2, style=Qt.PenStyle.DashLine)
 
         # Time handle — vertical dashed line, drag left/right
-        self._time_handle = pg.InfiniteLine(
-            pos=0.0, angle=90, movable=True, pen=_handle_pen,
+        self._time_handle = _WideHitLine(
+            pos=0.0,
+            angle=90,
+            movable=True,
+            pen=_handle_pen,
         )
+        self._time_handle.setHoverPen(_handle_hover_pen)
         self._time_handle.setVisible(False)
         self._time_handle.sigPositionChanged.connect(self._on_time_dragging)
-        self._time_handle.sigPositionChangeFinished.connect(self._on_any_handle_released)
+        self._time_handle.sigPositionChangeFinished.connect(
+            self._on_any_handle_released
+        )
         self._plot.addItem(self._time_handle)
 
         # Hz handle — horizontal dashed line, drag up/down
-        self._hz_handle = pg.InfiniteLine(
-            pos=200.0, angle=0, movable=True, pen=_handle_pen,
+        self._hz_handle = _WideHitLine(
+            pos=200.0,
+            angle=0,
+            movable=True,
+            pen=_handle_pen,
         )
+        self._hz_handle.setHoverPen(_handle_hover_pen)
         self._hz_handle.setVisible(False)
         self._hz_handle.sigPositionChanged.connect(self._on_hz_dragging)
         self._hz_handle.sigPositionChangeFinished.connect(self._on_any_handle_released)
@@ -114,9 +170,9 @@ class PitchWidget(QWidget):
         self._ref_freqs: Optional[np.ndarray] = None
         self._rec_times_raw: Optional[np.ndarray] = None
         self._rec_freqs_raw: Optional[np.ndarray] = None
-        self._hz_handle_base: float = 200.0   # geometric mean of recording at load time
-        self._hz_offset: float = 0.0           # current vertical offset in Hz
-        self._time_offset: float = 0.0         # current horizontal offset in seconds
+        self._hz_handle_base: float = 200.0  # geometric mean of recording at load time
+        self._hz_offset: float = 0.0  # current vertical offset in Hz
+        self._time_offset: float = 0.0  # current horizontal offset in seconds
 
     # ------------------------------------------------------------------
     # Public API
@@ -262,6 +318,5 @@ class PitchWidget(QWidget):
         corr = score_info.get("correlation", 0)
         color = "#00e676" if score >= 70 else ("#ffd700" if score >= 40 else "#ff5252")
         self._score_label.setText(
-            f"<span style='color:{color}'>{score}</span>/100"
-            f" &nbsp; corr: {corr:.2f}"
+            f"<span style='color:{color}'>{score}</span>/100 &nbsp; corr: {corr:.2f}"
         )

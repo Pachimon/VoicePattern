@@ -1,6 +1,8 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence
 from PyQt6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
     QDialog,
     QHBoxLayout,
     QHeaderView,
@@ -17,18 +19,24 @@ from settings_manager import ACTION_LABELS, DEFAULT_KEYBINDINGS
 
 class SettingsDialog(QDialog):
     """
-    Modal dialog for editing keybindings.
+    Modal dialog for editing keybindings and mouse modifier settings.
 
     Each row shows the action name and a QKeySequenceEdit.
     The user can click a cell and press the new key combo.
     Changes are only written when Save is clicked.
     """
 
-    def __init__(self, current_keybindings: dict[str, str], parent=None):
+    def __init__(
+        self,
+        current_keybindings: dict[str, str],
+        draw_sel_modifier: str = "Shift",
+        auto_analyze: bool = True,
+        parent=None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Settings — VoicePattern")
         self.setMinimumWidth(520)
-        self.setMinimumHeight(420)
+        self.setMinimumHeight(460)
 
         self._kb = dict(current_keybindings)
         self._editors: dict[str, QKeySequenceEdit] = {}
@@ -77,6 +85,28 @@ class SettingsDialog(QDialog):
         self._conflict_label.setStyleSheet("color: #ff5252; font-size: 9pt;")
         layout.addWidget(self._conflict_label)
 
+        # Mouse / behaviour options
+        opt_row = QHBoxLayout()
+        opt_row.setSpacing(16)
+
+        mod_label = QLabel("Draw selection modifier:")
+        mod_label.setStyleSheet("color: #bbb; font-size: 9pt;")
+        self._mod_combo = QComboBox()
+        self._mod_combo.addItems(["Shift", "Ctrl", "Alt"])
+        idx = self._mod_combo.findText(draw_sel_modifier)
+        self._mod_combo.setCurrentIndex(max(0, idx))
+
+        self._auto_analyze_check = QCheckBox("Auto-analyze pitch on selection change")
+        self._auto_analyze_check.setChecked(auto_analyze)
+        self._auto_analyze_check.setStyleSheet("color: #bbb; font-size: 9pt;")
+
+        opt_row.addWidget(mod_label)
+        opt_row.addWidget(self._mod_combo)
+        opt_row.addSpacing(24)
+        opt_row.addWidget(self._auto_analyze_check)
+        opt_row.addStretch()
+        layout.addLayout(opt_row)
+
         # Buttons
         btn_row = QHBoxLayout()
         self._reset_btn = QPushButton("Reset Defaults")
@@ -99,10 +129,15 @@ class SettingsDialog(QDialog):
 
     def get_keybindings(self) -> dict[str, str]:
         """Return the current (possibly edited) keybindings."""
-        # Sync from editors in case keySequenceChanged didn't fire for the last edit
         for action, editor in self._editors.items():
             self._kb[action] = editor.keySequence().toString()
         return dict(self._kb)
+
+    def get_draw_modifier(self) -> str:
+        return self._mod_combo.currentText()
+
+    def get_auto_analyze(self) -> bool:
+        return self._auto_analyze_check.isChecked()
 
     # ------------------------------------------------------------------
 
@@ -133,6 +168,8 @@ class SettingsDialog(QDialog):
             if action in self._editors:
                 self._editors[action].setKeySequence(QKeySequence(default_key))
                 self._kb[action] = default_key
+        self._mod_combo.setCurrentIndex(0)  # Shift
+        self._auto_analyze_check.setChecked(True)
         self._conflict_label.setText("")
 
     def _apply_style(self):
@@ -145,6 +182,17 @@ class SettingsDialog(QDialog):
             QKeySequenceEdit  { background: #0f3460; color: #e0e0e0;
                                 border: 1px solid #1a4a80; padding: 3px; }
             QKeySequenceEdit:focus { border-color: #ffd700; }
+            QComboBox {
+                background: #0f3460; color: #e0e0e0;
+                border: 1px solid #1a4a80; padding: 3px 8px;
+                border-radius: 3px;
+            }
+            QComboBox::drop-down { border: none; }
+            QComboBox QAbstractItemView {
+                background: #0f3460; color: #e0e0e0;
+                border: 1px solid #1a4a80;
+                selection-background-color: #1a4a80;
+            }
             QPushButton {
                 background: #0f3460; color: #e0e0e0;
                 border: 1px solid #1a4a80; padding: 5px 14px;
