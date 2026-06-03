@@ -38,7 +38,6 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStatusBar,
-    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -49,6 +48,7 @@ _MAX_RECENTS = 8
 
 from analysis import compare_pitch, extract_pitch
 from audio_engine import AudioEngine
+from clips_widget import ClipPanel
 from pitch_widget import PitchWidget
 from settings_manager import load_settings, save_settings
 from waveform_widget import WaveformWidget
@@ -148,20 +148,9 @@ class MainWindow(QMainWindow):
         self._pitch_widget = PitchWidget()
         hsplit.addWidget(self._pitch_widget)
 
-        sub_frame = QFrame()
-        sub_layout = QVBoxLayout(sub_frame)
-        sub_layout.setContentsMargins(4, 0, 0, 0)
-        sub_label = QLabel("Subtitles / Notes  (saved with Ctrl+S coming soon)")
-        sub_label.setStyleSheet("color: #888; font-size: 9pt;")
-        sub_layout.addWidget(sub_label)
-        self._subtitle_edit = QTextEdit()
-        self._subtitle_edit.setPlaceholderText(
-            "Type subtitles or notes for this clip…\n\n"
-            "e.g. 橋 (hashi) — pitch: LH  →  bridge\n"
-            "     箸 (hashi) — pitch: HL  →  chopsticks"
-        )
-        sub_layout.addWidget(self._subtitle_edit)
-        hsplit.addWidget(sub_frame)
+        self._clip_panel = ClipPanel()
+        self._clip_panel.clip_selected.connect(self._on_clip_selected)
+        hsplit.addWidget(self._clip_panel)
 
         hsplit.setSizes([820, 340])
         vsplit.addWidget(hsplit)
@@ -280,11 +269,20 @@ class MainWindow(QMainWindow):
             }}
             QMenu::item:selected {{ background: #1a4a80; }}
             QMenu::separator {{ height: 1px; background: #1a4a80; margin: 3px 8px; }}
-            QTextEdit {{
+            QPlainTextEdit {{
                 background: #0d1b2a; color: #cce;
                 border: 1px solid #1a4a80;
-                font-size: 12pt; padding: 6px;
+                font-size: 11pt; padding: 6px;
             }}
+            QListWidget {{
+                background: #0d1b2a; color: #e0e0e0;
+                border: 1px solid #1a4a80;
+                alternate-background-color: #0f2235;
+                font-size: 9pt;
+            }}
+            QListWidget::item {{ padding: 5px 6px; }}
+            QListWidget::item:selected {{ background: #1a4a80; color: #fff; }}
+            QListWidget::item:hover {{ background: #0f3460; }}
             QLabel     {{ color: #bbb; }}
             QSplitter::handle {{ background: #1a4a80; }}
             QStatusBar {{ background: #0d1b2a; color: #888; font-size: 9pt; }}
@@ -349,6 +347,7 @@ class MainWindow(QMainWindow):
 
         self._add_recent(path)
         self._waveform.load_waveform(audio.data, audio.sample_rate)
+        self._clip_panel.load_for_audio(path)
 
         for btn in [self._play_btn, self._loop_btn, self._analyze_btn, self._rec_btn]:
             btn.setEnabled(True)
@@ -441,8 +440,13 @@ class MainWindow(QMainWindow):
 
     def _on_selection_changed(self, start: float, end: float):
         self._sel_label.setText(f"  {start:.3f} s  —  {end:.3f} s  ({end - start:.3f} s)")
+        self._clip_panel.update_selection(start, end)
         if self._auto_analyze and self._engine.audio:
             self._analyze_timer.start()  # restarts the 400 ms countdown
+
+    def _on_clip_selected(self, start: float, end: float):
+        """Jump the waveform selection to a saved clip."""
+        self._waveform.set_selection(start, end)
 
     def _shift_selection(self, delta: float):
         if not self._engine.audio:
