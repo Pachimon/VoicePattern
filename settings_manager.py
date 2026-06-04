@@ -38,12 +38,24 @@ ACTION_LABELS: dict[str, str] = {
 }
 
 
+DEFAULT_ANKI: dict = {
+    "url":           "http://localhost:8765",
+    "deck":          "Default",
+    "model":         "Basic",
+    "field_text":    "Front",
+    "field_audio":   "Back",
+    "field_graph":   "Back",
+    "include_graph": True,
+}
+
+
 def load_settings() -> dict:
     """Return settings dict, merging saved values over defaults."""
     result: dict = {
-        "keybindings": dict(DEFAULT_KEYBINDINGS),
+        "keybindings":      dict(DEFAULT_KEYBINDINGS),
         "draw_sel_modifier": "Shift",
-        "auto_analyze": True,
+        "auto_analyze":     True,
+        "anki":             dict(DEFAULT_ANKI),
     }
     try:
         if SETTINGS_FILE.exists():
@@ -53,6 +65,8 @@ def load_settings() -> dict:
                 result["draw_sel_modifier"] = saved["draw_sel_modifier"]
             if "auto_analyze" in saved:
                 result["auto_analyze"] = bool(saved["auto_analyze"])
+            if "anki" in saved:
+                result["anki"].update(saved["anki"])
     except Exception:
         pass
     return result

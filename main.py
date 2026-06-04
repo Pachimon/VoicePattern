@@ -150,6 +150,7 @@ class MainWindow(QMainWindow):
 
         self._clip_panel = ClipPanel()
         self._clip_panel.clip_selected.connect(self._on_clip_selected)
+        self._clip_panel.anki_export.connect(self._on_anki_export)
         hsplit.addWidget(self._clip_panel)
 
         hsplit.setSizes([820, 340])
@@ -228,6 +229,7 @@ class MainWindow(QMainWindow):
             self._settings["keybindings"],
             self._settings.get("draw_sel_modifier", "Shift"),
             self._settings.get("auto_analyze", True),
+            self._settings.get("anki"),
             self,
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
@@ -237,6 +239,7 @@ class MainWindow(QMainWindow):
             self._settings["keybindings"] = new_kb
             self._settings["draw_sel_modifier"] = new_mod
             self._settings["auto_analyze"] = new_aa
+            self._settings["anki"] = dlg.get_anki()
             save_settings(self._settings)
             self._apply_keybindings(new_kb)
             self._waveform.set_draw_modifier(new_mod)
@@ -447,6 +450,134 @@ class MainWindow(QMainWindow):
     def _on_clip_selected(self, start: float, end: float):
         """Jump the waveform selection to a saved clip."""
         self._waveform.set_selection(start, end)
+
+    def _render_pitch_graph(self, start: float, end: float) -> bytes | None:
+        """
+        Render just the pitch contour line — transparent background, no axes,
+        no grid, no labels, no score — and return PNG bytes.
+        """
+        import os, tempfile
+        import pyqtgraph as pg
+        from pyqtgraph.exporters import ImageExporter
+
+        mono, sr = self._engine.get_mono_region(start, end)
+        if len(mono) == 0:
+            return None
+        try:
+            times, freqs = extract_pitch(mono, sr)
+        except Exception:
+            return None
+
+        # Off-screen plot — strip everything except the curve
+        pw = pg.PlotWidget()
+        pi = pw.getPlotItem()
+        pi.hideAxis("left")
+        pi.hideAxis("bottom")
+        pi.hideAxis("right")
+        pi.hideAxis("top")
+        pi.hideButtons()
+        pi.setMenuEnabled(False)
+        pw.setBackground(None)   # transparent
+
+        pw.addItem(pg.PlotDataItem(
+            times, freqs,
+            pen=pg.mkPen("#4a9eff", width=3),
+            symbol="o", symbolSize=4,
+            symbolBrush="#4a9eff", symbolPen=None,
+            connect="finite",
+        ))
+
+        exporter = ImageExporter(pi)
+        exporter.parameters()["width"]  = 800
+        exporter.parameters()["height"] = 250
+        exporter.parameters()["background"] = pg.mkColor(0, 0, 0, 0)  # transparent
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        tmp.close()
+        try:
+            exporter.export(fileName=tmp.name)
+            with open(tmp.name, "rb") as fh:
+                return fh.read()
+        except Exception:
+            return None
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+
+    def _on_anki_export(self, clips: list):
+        """Export one or more clips to Anki via AnkiConnect."""
+        import io
+        import soundfile as sf
+        import anki_client
+
+        anki = self._settings.get("anki", {})
+        url           = anki.get("url", "http://localhost:8765")
+        deck          = anki.get("deck", "")
+        model         = anki.get("model", "")
+        f_txt         = anki.get("field_text", "")
+        f_aud         = anki.get("field_audio", "")
+        f_graph       = anki.get("field_graph", "")
+        include_graph = anki.get("include_graph", True)
+
+        if not deck or not model or not f_txt or not f_aud:
+            self.statusBar().showMessage(
+                "Anki not fully configured — open Settings → Anki and fill in all fields."
+            )
+            return
+        if not self._engine.audio:
+            self.statusBar().showMessage("No audio file loaded.")
+            return
+
+        audio_stem = Path(self._engine.audio.path).stem
+        ok = err = 0
+
+        for clip in clips:
+            try:
+                base = f"vp_{audio_stem}_{int(clip['start']*1000)}_{int(clip['end']*1000)}"
+
+                # ── Audio ──────────────────────────────────────────
+                data, sr = self._engine.get_mono_region(clip["start"], clip["end"])
+                if len(data) == 0:
+                    err += 1
+                    continue
+                buf = io.BytesIO()
+                sf.write(buf, data.astype("float32"), sr, format="WAV", subtype="PCM_16")
+                wav_name = base + ".wav"
+                anki_client.store_media_file(url, wav_name, buf.getvalue())
+
+                # ── Pitch graph image ──────────────────────────────
+                fields = {
+                    f_txt: clip["subtitle"],
+                    f_aud: f"[sound:{wav_name}]",
+                }
+                if include_graph and f_graph:
+                    png_bytes = self._render_pitch_graph(clip["start"], clip["end"])
+                    if png_bytes:
+                        png_name = base + ".png"
+                        anki_client.store_media_file(url, png_name, png_bytes)
+                        img_tag = f'<img src="{png_name}">'
+                        if f_graph == f_aud:
+                            # Same field — append image after the sound tag
+                            fields[f_aud] += img_tag
+                        else:
+                            fields[f_graph] = img_tag
+
+                # ── Add note ───────────────────────────────────────
+                anki_client.add_note(url, deck, model, fields)
+                ok += 1
+
+            except Exception as e:
+                err += 1
+                self.statusBar().showMessage(f"Anki export error: {e}")
+
+        if ok:
+            word = "clip" if ok == 1 else "clips"
+            msg = f"Sent {ok} {word} to Anki deck '{deck}'."
+            if err:
+                msg += f"  ({err} failed)"
+            self.statusBar().showMessage(msg)
 
     def _shift_selection(self, delta: float):
         if not self._engine.audio:

@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -43,6 +44,7 @@ class ClipPanel(QWidget):
     """
 
     clip_selected = pyqtSignal(float, float)
+    anki_export = pyqtSignal(list)  # list[dict] — clips to export
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -59,7 +61,9 @@ class ClipPanel(QWidget):
 
         # ---- Header ----
         self._header = QLabel("Clips")
-        self._header.setStyleSheet("color: #4a9eff; font-weight: bold; font-size: 10pt;")
+        self._header.setStyleSheet(
+            "color: #4a9eff; font-weight: bold; font-size: 10pt;"
+        )
         layout.addWidget(self._header)
 
         sep = QFrame()
@@ -76,8 +80,6 @@ class ClipPanel(QWidget):
         self._text = QPlainTextEdit()
         self._text.setPlaceholderText(
             "Enter subtitle / notes for the selected region…\n\n"
-            "e.g.  橋 (hashi)  — pitch: LH  →  bridge\n"
-            "      箸 (hashi)  — pitch: HL  →  chopsticks"
         )
         self._text.setMaximumHeight(80)
         layout.addWidget(self._text)
@@ -109,10 +111,34 @@ class ClipPanel(QWidget):
         self._list.itemClicked.connect(self._on_item_clicked)
         layout.addWidget(self._list)
 
-        # ---- Delete ----
+        # ---- Delete + Anki export ----
+        action_row = QHBoxLayout()
         self._del_btn = QPushButton("Delete Selected")
         self._del_btn.clicked.connect(self._delete_selected)
-        layout.addWidget(self._del_btn)
+
+        sep3 = QFrame()
+        sep3.setFrameShape(QFrame.Shape.VLine)
+        sep3.setStyleSheet("color: #1a4a80;")
+        sep3.setFixedWidth(2)
+
+        self._export_one_btn = QPushButton("Send to Anki")
+        self._export_one_btn.setToolTip(
+            "Export the selected clip to Anki via AnkiConnect"
+        )
+        self._export_one_btn.clicked.connect(self._export_selected)
+
+        self._export_all_btn = QPushButton("Send All to Anki")
+        self._export_all_btn.setToolTip(
+            "Export all saved clips to Anki via AnkiConnect"
+        )
+        self._export_all_btn.clicked.connect(self._export_all)
+
+        action_row.addWidget(self._del_btn)
+        action_row.addStretch()
+        action_row.addWidget(sep3)
+        action_row.addWidget(self._export_one_btn)
+        action_row.addWidget(self._export_all_btn)
+        layout.addLayout(action_row)
 
     # ------------------------------------------------------------------
     # Public API called by main window
@@ -140,9 +166,7 @@ class ClipPanel(QWidget):
             return  # we caused this change — ignore it
         self._cur_start = start
         self._cur_end = end
-        self._sel_label.setText(
-            f"{_fmt(start)} – {_fmt(end)}  ({end - start:.2f} s)"
-        )
+        self._sel_label.setText(f"{_fmt(start)} – {_fmt(end)}  ({end - start:.2f} s)")
         self._list.clearSelection()
 
     # ------------------------------------------------------------------
@@ -156,19 +180,23 @@ class ClipPanel(QWidget):
 
         # Update if a clip with the same timestamps already exists
         for i, clip in enumerate(self._clips):
-            if (abs(clip["start"] - self._cur_start) < 0.01
-                    and abs(clip["end"] - self._cur_end) < 0.01):
+            if (
+                abs(clip["start"] - self._cur_start) < 0.01
+                and abs(clip["end"] - self._cur_end) < 0.01
+            ):
                 self._clips[i]["subtitle"] = text
                 self._refresh_list()
                 self._save_file()
                 return
 
         # New clip
-        self._clips.append({
-            "start": self._cur_start,
-            "end":   self._cur_end,
-            "subtitle": text,
-        })
+        self._clips.append(
+            {
+                "start": self._cur_start,
+                "end": self._cur_end,
+                "subtitle": text,
+            }
+        )
         self._clips.sort(key=lambda c: c["start"])
         self._refresh_list()
         self._save_file()
@@ -189,6 +217,16 @@ class ClipPanel(QWidget):
         self.clip_selected.emit(clip["start"], clip["end"])
         self._from_jump = False
 
+    def _export_selected(self):
+        rows = {self._list.row(i) for i in self._list.selectedItems()}
+        clips = [self._clips[r] for r in rows if 0 <= r < len(self._clips)]
+        if clips:
+            self.anki_export.emit(clips)
+
+    def _export_all(self):
+        if self._clips:
+            self.anki_export.emit(list(self._clips))
+
     def _delete_selected(self):
         rows = sorted(
             {self._list.row(i) for i in self._list.selectedItems()},
@@ -204,10 +242,7 @@ class ClipPanel(QWidget):
     def _refresh_list(self):
         self._list.clear()
         for clip in self._clips:
-            label = (
-                f"{_fmt(clip['start'])} – {_fmt(clip['end'])}"
-                f"   {clip['subtitle']}"
-            )
+            label = f"{_fmt(clip['start'])} – {_fmt(clip['end'])}   {clip['subtitle']}"
             self._list.addItem(label)
 
     def _save_file(self):
